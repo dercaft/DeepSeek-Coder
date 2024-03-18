@@ -45,8 +45,6 @@ if __name__ == '__main__':
     for i, (k,status_with_err_code) in enumerate(status_with_err_codes.items()):
         print(f"##Status with Error Code {i}: ", k,status_with_err_code)
         print(status_with_err_code["error_reason"])
-        for item in status_with_err_code["error_reason"]:
-            print(item)
 
         # break
     # 2. Automatic Code Revision

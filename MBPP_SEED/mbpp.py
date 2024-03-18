@@ -410,9 +410,9 @@ class MBPP:
             os.remove(logfilepath)
             # according to the error ids, we can get the error code and question and real answers.
             # delete correct ids in status_record_dict
-            # deleted_keys = status_record_dict.keys() - err_ids.keys()
-            # for k in deleted_keys:
-            #     del status_record_dict[k]
+            deleted_keys = status_record_dict.keys() - err_ids.keys()
+            for k in deleted_keys:
+                del status_record_dict[k]
             for k, v in err_ids.items():
                 status_record_dict[k].update({"error_reason": [r["result"] for r in v]})
         # gpt.eval()

@@ -390,9 +390,9 @@ def evaluate_functional_correctness_get_results(
     for id,result in results.items():
         passed = [r[1]["passed"] for r in result] # 每个r都是该题目一次推理的结果(check_correctness 的返回值)
         total.append(len(passed))
-        correct.append(sum([sum(r) for r in passed])) # 
+        correct.append(sum(passed))
         # 如果该题目所有的推理都没有通过，记录错误结果
-        if sum([sum(r) for r in passed]) == 0 or True:
+        if sum(passed) == 0:
             error_ids[id]=[r[1] for r in result]
     total = np.array(total)
     correct = np.array(correct)

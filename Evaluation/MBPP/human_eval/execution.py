@@ -47,10 +47,11 @@ def check_correctness(
 
                 # Disable functionalities that can make destructive changes to the test.
                 reliability_guard()
-
+                output=""
                 try:
                     exec_globals = {}
-                    with swallow_io():
+                    # with swallow_io():
+                    with change_io(output):
                         with time_limit(timeout):
                             # WARNING
                             # This program exists to execute untrusted model-generated code. Although
