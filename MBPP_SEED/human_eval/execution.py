@@ -69,8 +69,8 @@ def check_correctness(
                     result.append(f"failed: AssertionError {e}")
                 except BaseException as e:
                     result.append(f"failed: {e}")
-                #print(sample["test_code"])
-                #print(result)
+                print("###### ",sample["test_code"])
+                print(result)
                 # Needed for cleaning up.
                 shutil.rmtree = rmtree
                 os.rmdir = rmdir
@@ -561,8 +561,8 @@ def check_correctness(
     return {
         "task_id"      : task_id,
         "completion_id": completion_id,
-        "result"       : result[0],
-        "passed"       : result[0] == "passed",
+        "result"       : result,
+        "passed"       : [1 if "passed" in r else 0 for r in result],
         "finish"       : -1 if "finish" not in sample else sample["finish"],
         "code"         : sample["test_code"]
     }

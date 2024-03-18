@@ -56,7 +56,12 @@ class MBPP:
         os.makedirs(self.log_dir, exist_ok=True)
         tokenizer_cls = tokenizer_cfg.pop('cls')
         try:
-            self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_cfg.pop("model_path"), trust_remote_code=True)       
+            # self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_cfg.pop("model_path"), trust_remote_code=True)       
+            self.tokenizer = AutoTokenizer.from_pretrained(str(tokenizer_cfg["model_path"]), trust_remote_code=True)
+            # left padding, use bos_token
+            # self.tokenizer.padding_side = "left"
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id       
         except Exception as e:
             print(e)
             assert False
@@ -173,13 +178,13 @@ class MBPP:
         """
         mem = torch.cuda.max_memory_allocated() / (1 << 30)
         avg_time = (time.time() - start_time) / processed_num * bs
-        print(
-            f'DP RANK:{dp_rank} process_num/all_num:{int(processed_num)}/{all_num} '
-            f'avg_time_per_batch:{avg_time:.2f} s '
-            f'still_need:{((all_num - processed_num) // bs + 1) * avg_time / 60:.2f} m',
-            f'mem:{mem:.3f} GiB bs:{bs}',
-            flush=True
-        )
+        # print(
+        #     f'DP RANK:{dp_rank} process_num/all_num:{int(processed_num)}/{all_num} '
+        #     f'avg_time_per_batch:{avg_time:.2f} s '
+        #     f'still_need:{((all_num - processed_num) // bs + 1) * avg_time / 60:.2f} m',
+        #     f'mem:{mem:.3f} GiB bs:{bs}',
+        #     flush=True
+        # )
         if processed_num == all_num:
             print(f'EVAL DONE! Process time {(time.time() - start_time) / 60:.2f} m', flush=True)
 
