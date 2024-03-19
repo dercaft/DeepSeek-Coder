@@ -38,7 +38,6 @@ def check_correctness(
         random_id = random.randint(1, 100000)
         if "python" in language_type.lower():
             with create_tempdir():
-
                 # These system calls are needed when cleaning up tempdir.
                 import os
                 import shutil
@@ -51,32 +50,16 @@ def check_correctness(
 
                 try:
                     exec_globals = {}
-                    with swallow_io():
-                        with time_limit(timeout):
-                            # WARNING
-                            # This program exists to execute untrusted model-generated code. Although
-                            # it is highly unlikely that model-generated code will do something overtly
-                            # malicious in response to this test suite, model-generated code may act
-                            # destructively due to a lack of model capability or alignment.
-                            # Users are strongly encouraged to sandbox this evaluation suite so that it
-                            # does not perform destructive actions on their host or network.
-                            # Once you have read this disclaimer and taken appropriate precautions,
-                            # uncomment the following line and proceed at your own risk:
-                            exec(sample["test_code"], exec_globals)
-                        result.append("passed")
-                except TimeoutException:
-                    result.append("failed: TimeoutException")
-                except AssertionError as e:
-                    result.append(f"failed: AssertionError {e}")
-                except BaseException as e:
-                    result.append(f"failed: {e}")
-                # print("###### ",sample["test_code"])
-                # print(result)
-                # Needed for cleaning up.
-                shutil.rmtree = rmtree
-                os.rmdir = rmdir
-                os.chdir = chdir
-
+                    with modified_swallow_io() as captured:  
+                        exec(sample["test_code"], exec_globals)
+                    result.append("passed")
+                except Exception as e:
+                    result.append(f"failed: {type(e).__name__}, {e}")
+                finally:
+                    shutil.rmtree = rmtree
+                    os.rmdir = rmdir
+                    os.chdir = chdir
+            
         elif "go" in language_type.lower():
             assert (
                 tmp_dir is not None
@@ -674,6 +657,13 @@ def swallow_io():
         with contextlib.redirect_stderr(stream):
             with redirect_stdin(stream):
                 yield
+
+@contextlib.contextmanager
+def modified_swallow_io():
+    stream = WriteOnlyStringIO()
+    with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
+        yield stream
+        
 @contextlib.contextmanager
 def change_io(output_space):
     stream = WriteOnlyStringIO(output_space)
