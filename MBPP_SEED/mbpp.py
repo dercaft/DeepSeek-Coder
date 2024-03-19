@@ -14,6 +14,7 @@ from tqdm import tqdm
 from human_eval.evaluation import (
     evaluate_functional_correctness,
     evaluate_functional_correctness_get_results,
+    check_correctness
 )
 from transformers import (
     AutoTokenizer,
@@ -23,7 +24,7 @@ from transformers import (
 )
 from utils.dataset import MBPPDataset
 from utils.utils import cleanup_code
-
+from seed_example import example1,example2,example3
 
 class KeywordsStoppingCriteria(StoppingCriteria):
     def __init__(self, keywords_str, tokenizer):
@@ -420,6 +421,58 @@ class MBPP:
         # prompt_indices = prompt_indices_split[dp_rank]
         accelerator.wait_for_everyone()
         return status_record_dict
+    
+    def icl_revise_error_code(self, gpt, accelerator,status_with_err_codes):
+         # Construct the prompt for generating the revised code
+        language="python"
+        results=[]
+        for task_id,status_with_err_code in status_with_err_codes.items():
+            sample={}
+            passed=False
+            done_index = status_with_err_code['prompt'].rfind('[DONE]')
+            begin_index = status_with_err_code['prompt'].rfind('[BEGIN]')
+            if done_index != -1 and begin_index != -1:
+                question = status_with_err_code['prompt'][done_index + len('[DONE]') + 1:begin_index]
+            prompt=f'''{example1}[DONE]\n{example2}[DONE]\n{example3}[DONE]\n
+            As a code correction expert, you will be given incorrect code and the reasons for the errors. You need to update the incorrect code based on the requirements of the task and the reasons for the errors.\n
+            Question:{question}\n
+            Correct Solution: {status_with_err_code["answer"]}\n
+            Error Code: {status_with_err_code["generation"]}\n
+            Error Messages: {status_with_err_code["error_reason"]}\n
+            Revised Code: [BEGIN]'''
+            _, tests_section = question.split('pass these tests:\n', 1)
+
+            # Tokenize the prompt
+            tokenized_prompt =  self.tokenizer(prompt, return_tensors="pt", padding=True, truncation=True, max_length=self.max_seq_len)
+            input_ids = tokenized_prompt["input_ids"].to(gpt.device)
+            attention_mask = tokenized_prompt["attention_mask"].to(gpt.device)
+
+            while not passed :
+                # Set generation parameters
+                stop_criteria = KeywordsStoppingCriteria(["[DONE]"],  self.tokenizer)
+                generated_tokens = gpt.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_length=self.max_seq_len + self.max_gen_len,
+                top_p=self.top_p,
+                eos_token_id= self.tokenizer.eos_token_id,
+                do_sample=True,  # Set to True if you want to use sampling instead
+                stopping_criteria=StoppingCriteriaList([stop_criteria]),
+                pad_token_id= self.tokenizer.eos_token_id,
+                )
+
+                # Decode generated tokens to text
+                revised_code = self.tokenizer.decode(generated_tokens[0], skip_special_tokens=True).split("[BEGIN]")[-1].strip()
+                revised_code = revised_code.split('[DONE]')[0].strip()
+                
+                sample["task_id"]=task_id
+                sample["generation"]=revised_code
+                sample["test_code"] = revised_code + tests_section
+                result = check_correctness(task_id,sample,language_type=language,timeout=10)
+                passed = result["passed"]
+                print(f"task_id:{task_id},passed:{passed},code:{sample['test_code']}")
+        return revised_code
+
 
     @torch.no_grad()
     def generate_revision_FSP(self, gpt, accelerator, err_codes_dict):
