@@ -29,7 +29,7 @@ class MBPPDataset:
                 self.testdata.append(self.clean_data[i])
         self.traindata = []
         # for i in range(601, 957):
-        for i in range(601, 605): # DEBUG
+        for i in range(601, 957):
             self.traindata.append(self.clean_data[i])
         np.random.seed(1234)
         print(f"Read MBPP from {root}, number of samples {len(self.testdata)}")

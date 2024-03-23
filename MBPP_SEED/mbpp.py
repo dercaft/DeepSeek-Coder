@@ -10,6 +10,8 @@ import datetime
 import subprocess
 import torch.distributed as dist
 from attrdict import AttrDict
+import csv
+from datetime import datetime
 from tqdm import tqdm
 from human_eval.evaluation import (
     evaluate_functional_correctness,
@@ -24,8 +26,8 @@ from transformers import (
 )
 from utils.dataset import MBPPDataset
 from utils.utils import cleanup_code
-from seed_example import example1,example2,example3
-
+from seed_datasets import example1,example2,example3
+import Levenshtein
 class KeywordsStoppingCriteria(StoppingCriteria):
     def __init__(self, keywords_str, tokenizer):
         StoppingCriteria.__init__(self)
@@ -285,7 +287,7 @@ class MBPP:
         processed_num = 0
         log_file = os.path.join(
             self.log_dir,
-            f"{self.model_name}_rank{dp_rank}_bs{self.batch_size}_shot_log_{self.language}.json",
+            f"err_{self.model_name}_rank{dp_rank}_bs{self.batch_size}_shot_log_{self.language}.json",
         )
         tmpfile = open(log_file, "w")
 
@@ -351,7 +353,7 @@ class MBPP:
                 decoded = gpt.generate(
                     input_ids=inputids,
                     attention_mask=attenion_mask,
-                    max_new_tokens=self.max_gen_len,
+                    max_new_tokens=300,
                     top_p=self.top_p,
                     eos_token_id=self.tokenizer.eos_token_id,
                     do_sample=False,
@@ -359,12 +361,14 @@ class MBPP:
                     pad_token_id=self.tokenizer.eos_token_id,
                 )
             else:
+                stop_criteria = KeywordsStoppingCriteria(["[DONE]"], self.tokenizer)
                 decoded = gpt.generate(
-                    tokenized_prompt_lens,
-                    max_new_tokens=self.max_gen_len,
-                    temperature=self.temperature,
-                    top_p=0.95,
-                    inference_increment=True,
+                    input_ids=inputids,
+                    attention_mask=attenion_mask,
+                    max_new_tokens=300,
+                    top_p=self.top_p,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                    do_sample=True,
                     stopping_criteria=StoppingCriteriaList([stop_criteria]),
                     pad_token_id=self.tokenizer.eos_token_id,
                 )
@@ -372,97 +376,92 @@ class MBPP:
             for local_idx, text in enumerate(decoded):
                 prediction = decoded[local_idx]
                 prediction = self.tokenizer.decode(prediction, skip_special_tokens=True)
-                # print(prediction)
                 suffixprediction = prediction[prompt_lens[local_idx] :]
                 suffixprediction = suffixprediction.split("[DONE]")[0].strip()
                 status_record_dict[taskid[local_idx]].update(
                     {"generation": suffixprediction}
                 )
-                res = {"task_id": taskid[local_idx], "generation": suffixprediction}
+                res = {"task_id": taskid[local_idx], "generation": suffixprediction,\
+                       "prompt":status_record_dict[taskid[local_idx]]['prompt'],\
+                        "answer":status_record_dict[taskid[local_idx]]['answer']}
                 tmpfile.write(json.dumps(res) + "\n")
                 tmpfile.flush()
                 totoalnum += 1
 
-            # self.log_score(dp_rank, totoalnum, all_num, start_time, self.batch_size)
         tmpfile.close()
-        accelerator.wait_for_everyone()
-        if accelerator.is_local_main_process:
-            logfilepath = os.path.join(self.log_dir, f"final_{self.model_name}.jsonl")
-            logfile = open(logfilepath, "w")
-            for i in range(accelerator.num_processes):
-                tmplogfile = os.path.join(
-                    self.log_dir,
-                    f"{self.model_name}_rank{i}_bs{self.batch_size}_shot_log_{self.language}.json",
-                )
-                logfile.write(open(tmplogfile).read().strip() + "\n")
-                os.remove(tmplogfile)
-            logfile.close()
-            timeout = 10
-            runlang = self.language
-            res, err_ids = evaluate_functional_correctness_get_results(
-                input_file=logfilepath,
-                problem_file=os.path.join(self.data_root, f"mbpp.jsonl"),
-                tmp_dir=self.log_dir,
-                timeout=timeout,
-                language=runlang,
-                dataset=dataset,
-            )
-            print("score is", res["pass@%d" % self.k])
-            os.remove(logfilepath)
-            # according to the error ids, we can get the error code and question and real answers.
-            # delete correct ids in status_record_dict
-            deleted_keys = status_record_dict.keys() - err_ids.keys()
-            for k in deleted_keys:
-                del status_record_dict[k]
-            for k, v in err_ids.items():
-                status_record_dict[k].update({"error_reason": [r["result"] for r in v]})
-        # gpt.eval()
-        # prompt_indices_split = np.array_split(range(nprompt), dp_size)
-        # prompt_indices = prompt_indices_split[dp_rank]
-        accelerator.wait_for_everyone()
-        return status_record_dict
+        timeout = 1000
+        runlang = self.language
+        err_ids = evaluate_functional_correctness_get_results(
+            input_file=log_file,
+            problem_file=os.path.join(self.data_root, f"mbpp.jsonl"),
+            tmp_dir=self.log_dir,
+            timeout=timeout,
+            language=runlang,
+            dataset=dataset,
+        )
+
+        deleted_keys = status_record_dict.keys() - err_ids.keys()
+        for k in deleted_keys:
+            del status_record_dict[k]
+        for k, v in err_ids.items():
+            status_record_dict[k].update({"error_reason": [r["result"] for r in v]})
+
+        with open(log_file, 'w') as f:
+            json.dump(status_record_dict, f, indent=4)
+
+        return log_file
     
-    def icl_revise_error_code(self, gpt, accelerator,status_with_err_codes):
+    @torch.no_grad()
+    def icl_revise_error_code(self, gpt, accelerator, logfile, timestamp):
          # Construct the prompt for generating the revised code
         language="python"
-        results=[]
-        for task_id,status_with_err_code in status_with_err_codes.items():
+        dp_rank = accelerator.process_index
+        with open(logfile, 'r') as f:
+            status_record_dict = json.load(f)
+        results={}
+        for task_id,status_with_err_code in status_record_dict.items():
             sample={}
             passed=False
             done_index = status_with_err_code['prompt'].rfind('[DONE]')
             begin_index = status_with_err_code['prompt'].rfind('[BEGIN]')
             if done_index != -1 and begin_index != -1:
                 question = status_with_err_code['prompt'][done_index + len('[DONE]') + 1:begin_index]
-            prompt=f'''{example1}[DONE]\n{example2}[DONE]\n{example3}[DONE]\n
-            As a code correction expert, you will be given incorrect code and the reasons for the errors. You need to update the incorrect code based on the requirements of the task and the reasons for the errors.\n
+            correct_solution=status_with_err_code["answer"]
+            generation_error_code=status_with_err_code["generation"]
+            error_message=status_with_err_code["error_reason"]
+            prompt=f'''{example3}\nAs a code correction expert, you will be given incorrect code and the reasons for the errors.  Your objective is to make the minimal necessary modifications to the provided code based on the task requirements and detailed reasons for the errors.  \n
             Question:{question}\n
-            Correct Solution: {status_with_err_code["answer"]}\n
-            Error Code: {status_with_err_code["generation"]}\n
-            Error Messages: {status_with_err_code["error_reason"]}\n
+            Correct Solution: {correct_solution}\n
+            Error Code: {generation_error_code}\n
+            Error Messages: {error_message}\n
             Revised Code: [BEGIN]'''
+            # print(prompt)
+            print(question)
             _, tests_section = question.split('pass these tests:\n', 1)
-
+            # print(prompt)
             # Tokenize the prompt
             tokenized_prompt =  self.tokenizer(prompt, return_tensors="pt", padding=True, truncation=True, max_length=self.max_seq_len)
             input_ids = tokenized_prompt["input_ids"].to(gpt.device)
             attention_mask = tokenized_prompt["attention_mask"].to(gpt.device)
 
-            while not passed :
-                # Set generation parameters
+
+            for _ in range(30):
                 stop_criteria = KeywordsStoppingCriteria(["[DONE]"],  self.tokenizer)
                 generated_tokens = gpt.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_length=self.max_seq_len + self.max_gen_len,
-                top_p=self.top_p,
-                eos_token_id= self.tokenizer.eos_token_id,
-                do_sample=True,  # Set to True if you want to use sampling instead
-                stopping_criteria=StoppingCriteriaList([stop_criteria]),
-                pad_token_id= self.tokenizer.eos_token_id,
-                )
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    max_new_tokens=300,
+                    top_p=self.top_p,
+                    eos_token_id= self.tokenizer.eos_token_id,
+                    do_sample=True, 
+                    stopping_criteria=StoppingCriteriaList([stop_criteria]),
+                    pad_token_id= self.tokenizer.eos_token_id,
+                    temperature=self.temperature,
+                    )
 
                 # Decode generated tokens to text
-                revised_code = self.tokenizer.decode(generated_tokens[0], skip_special_tokens=True).split("[BEGIN]")[-1].strip()
+                revised_code = self.tokenizer.decode(generated_tokens[0], skip_special_tokens=True)
+                revised_code = revised_code.split("[BEGIN]")[-1].strip()
                 revised_code = revised_code.split('[DONE]')[0].strip()
                 
                 sample["task_id"]=task_id
@@ -470,9 +469,36 @@ class MBPP:
                 sample["test_code"] = revised_code + tests_section
                 result = check_correctness(task_id,sample,language_type=language,timeout=10)
                 passed = result["passed"]
-                print(f"task_id:{task_id},passed:{passed},code:{sample['test_code']}")
-        return revised_code
+                print(f"task_id:{task_id},passed:{passed}")
+                if passed:
+                    Levenshtein_distance = Levenshtein.distance(generation_error_code, revised_code)
+                    if task_id in results:
+                        if Levenshtein_distance < results[task_id]["Levenshtein_distance"]:
+                            # 如果新数据的Levenshtein距离更小，更新该条目
+                            results[task_id] = {
+                                "code_prompt":status_with_err_code['prompt'],\
+                                 "error_code": generation_error_code,\
+                                "revise_prompt":prompt , "revised_code": revised_code, \
+                                "passed": passed, "Levenshtein_distance":Levenshtein_distance, 
+                            }
+                    else:
+                        results[task_id]={
+                                "code_prompt":status_with_err_code['prompt'],\
+                                 "error_code": generation_error_code,\
+                                "revise_prompt":prompt , "revised_code": revised_code, \
+                                "passed": passed, "Levenshtein_distance":Levenshtein_distance, 
+                            }
+                # accelerator.wait_for_everyone()
+                
+        filename = f"revised_{timestamp}_rank{dp_rank}.jsonl"
+        filename = os.path.join(self.log_dir, filename)
 
+        with open(filename, "w", encoding='utf-8') as jsonlfile:
+            for task_id, task_result in results.items():
+                task_result["task_id"] = task_id
+                json_line = json.dumps(task_result)
+                jsonlfile.write(json_line + "\n")
+        return results
 
     @torch.no_grad()
     def generate_revision_FSP(self, gpt, accelerator, err_codes_dict):
@@ -490,3 +516,4 @@ class MBPP:
             if i % dp_size == dp_rank:
                 err_codes_rank[k] = v
         # generate the revision
+

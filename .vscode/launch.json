@@ -27,14 +27,15 @@
                 "--config_file=MBPP_SEED/test_config.yaml",
                 "--num_processes=1",
                 "MBPP_SEED/seed.py",
-                "--model_path=/mnt/82_store/xxw/models/deepseek-coder-1.3b-base",
+                "--model_path=Salesforce/codegen-2B-nl",
                 "--dataroot=MBPP_SEED/data",
                 "--logdir=MBPP_SEED/output",
             ],
             "env": {
-                "CUDA_VISIBLE_DEVICES": "0",
+                "CUDA_VISIBLE_DEVICES": "3",
                 "CUDA_LAUNCH_BLOCKING": "1",
                 "TORCH_USE_CUDA_DSA": "True",
+                "HF_HOME":"/mnt/82_store/huggingface_cache",
             },
         },
     ]

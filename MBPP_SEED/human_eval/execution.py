@@ -47,18 +47,21 @@ def check_correctness(
                 chdir = os.chdir
                 # Disable functionalities that can make destructive changes to the test.
                 reliability_guard()
-
-                try:
-                    exec_globals = {}
-                    with modified_swallow_io() as captured:  
+                with modified_swallow_io() as captured:  
+                    try:
+                        exec_globals = {}
                         exec(sample["test_code"], exec_globals)
-                    result.append("passed")
-                except Exception as e:
-                    result.append(f"failed: {type(e).__name__}, {e}")
-                finally:
-                    shutil.rmtree = rmtree
-                    os.rmdir = rmdir
-                    os.chdir = chdir
+                        result.append("passed")
+                    except Exception as e:
+                        split_pattern = 'exec(sample["test_code"], exec_globals)'
+                        # result.append(f"failed: {type(e).__name__}, {e}\n")
+                        simple_error_info=f"failed: {type(e).__name__}, {e}\n"
+                        error_info = traceback.format_exc()
+                        result.append(f"failed: {error_info.split(split_pattern)[1] if split_pattern in error_info else simple_error_info }")
+                    finally:
+                        shutil.rmtree = rmtree
+                        os.rmdir = rmdir
+                        os.chdir = chdir
             
         elif "go" in language_type.lower():
             assert (

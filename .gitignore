@@ -4,3 +4,4 @@ __pycache__/
 Evaluation/MBPP/eval_instruct.sh
 Evaluation/LeetCode/output/
 .vscode/
+env.sh

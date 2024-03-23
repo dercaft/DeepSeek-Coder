@@ -401,9 +401,9 @@ def evaluate_functional_correctness_get_results(
         pass_at_k = {f"pass@{k}": estimate_pass_at_k(total, correct, k).mean()
                      for k in ks if (total >= k).all()}
         print(pass_at_k)
-    else:
-        print("Total:", np.sum(total))
-        print("Correct:", np.sum(correct))
-    return pass_at_k, error_ids
+    # else:
+    #     print("Total:", np.sum(total))
+    #     print("Correct:", np.sum(correct))
+    return  error_ids
 
 
